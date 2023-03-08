@@ -24,6 +24,8 @@ const { isLoged } = require('./utils/isLoged')
 const { cloudinary } = require('./cloudinary/cloudConfig');
 const multer = require('multer');
 const { storage } = require('./cloudinary/cloudConfig');
+const { randomUUID } = require('crypto');
+const { REFUSED } = require('dns');
 const upload = multer({ storage })
 //const upload = multer({ dest: 'uploads/' })
 
@@ -297,13 +299,16 @@ app.get("/cart", async (req, res) => {
 app.post('/add-to-cart', async (req, res) => {
     let id = req.body.product_id;
     let price = req.body.product_price;
-    let product = { product_id: id, qty: 1, price: price };
+    let name = req.body.product_name;
+    let user_id = randomUUID();
     if (req.session.cart) {
+        let product = { product_id: id,name: name, qty: 1, price: price,};
         let cart = req.session.cart;
         cart.push(product)
         req.flash('success', 'Successfully added to cart')
         res.redirect(`/product/${id}`)
     } else {
+        let product = { product_id: id,name: name, qty: 1, price: price, user_id: user_id}
         req.session.cart = [product]
         let cart = req.session.cart;
         req.flash('success', 'Successfully added to cart')
@@ -362,33 +367,58 @@ app.post('/edit_qty', async (req, res) => {
 
 app.get('/checkout', async (req, res) => {
     let total = req.session.total.toFixed(2);
+    
     res.render('orders/checkout', { total })
 })
 
-app.post('/checkoutToPay', async (req, res) => {
-    let { name, lastName, email, country, city, zip, street, phone } = req.body
+app.post('/checkoutPay', async (req, res) => {
     let costs = req.session.total.toFixed(2)
     let orderDate = date;
     let product_ids = "";
+    let product_qtys = "";
     let cart = req.session.cart;
+    let user_id = cart[0].user_id;
     for (let i = 0; i < cart.length; i++) {
-        product_ids = cart[i].product_id
+        product_ids =  cart[i].product_id + ',' + product_ids
+        product_qtys = cart[i].qty + ',' + product_qtys;
     }
 
     try {
-        await conn.query(`INSERT INTO orders(name, lastname, email, country, city, zip, street, phone, status,date, costs, products) VALUES('${req.body.name}', '${req.body.lastName}', '${req.body.email}', '${req.body.country}', '${req.body.city}', '${req.body.zip}', '${req.body.street}', '${req.body.phone}','false','${orderDate}', '${costs}', '${product_ids}')`)
+        await conn.query(`INSERT INTO orders(name, lastname, email, country, city, zip, street, phone, status,orderdate, costs, products_ids,products_qtys, user_id) VALUES('${req.body.name}', '${req.body.lastName}', '${req.body.email}', '${req.body.country}', '${req.body.city}', '${req.body.zip}', '${req.body.street}', '${req.body.phone}','false','${orderDate}', '${costs}', '${product_ids}', '${product_qtys}','${user_id}')`)
         req.flash('success', "Your order sucessfully placed. Choose payment method")
-        res.redirect('/payment')
+        res.redirect('/choose_payment')
     } catch (e) {
-        console.log("error", e)
+        req.flash('error', e.message);
         res.redirect('/checkout')
     }
 
 })
 
-app.get('/payment', async (req, res) => {
+app.get('/choose_payment', async (req, res) => {
     let total = req.session.total.toFixed(2)
-    res.render('orders/pay', { total })
+    let items = [];
+    let cartItems = []
+    let count = 0
+    let cart = req.session.cart;
+    for (let i = 0; i < cart.length; i++) {
+        await conn.query(`SELECT * FROM products WHERE id = '${cart[i].product_id}'`, async (err, product) => {
+            if (!err) {
+                count += 1;
+                items.push(product.rows);
+                if (cart.length === count) {
+                 await conn.query(`SELECT * FROM orders WHERE user_id = '${cart[0].user_id} RETURNING *`, async(error, order) =>{
+                    if(!error){
+                     console.log(order)   
+                     res.render('orders/pay', { total,items, cart })
+                    }else{
+                        res.redirect('choose_payment')
+                     }
+                 })
+                }
+            }
+        })
+    }
+    
 })
 
 app.get('/add', (req, res) => {
